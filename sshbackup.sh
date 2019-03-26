@@ -23,15 +23,10 @@
 
 LOCAL_DIR=`dirname $0`
 HOST=`hostname`
-BACKUP_PATH=/home/backup/mikrotik
+BACKUP_PATH=$LOCAL_DIR/mikrotik
 CONF=$LOCAL_DIR/sshbackup.conf
-LOG=$LOCAL_DIR/sshbackup`date +%Y%m%d-%T`.log
-SSH_USER=admin
-SSH_PASS=1234
-DELETE_FILE=yes
-MAIL_FROM=support@firma.cz
-MAIL_TO=admin@firma.cz
-
+LOG=$LOCAL_DIR/logs/sshbackup`date +%Y%m%d-%T`.log
+source sshbackup.credentials
 
 echo -e "\033[1mMikrotik SSH backup utility\033[0m"
 echo ""
@@ -54,6 +49,32 @@ fi
 INDEX=0
 SCP_ERROR=no
 
+
+gethosts="/ip ipsec peer print brief"
+HOSTS=$(sshpass -p $SSH_PASS ssh -o StrictHostKeyChecking=no $SSH_USER@$CORE_ROUTER $gethosts)
+for HOST in $HOSTS
+do
+    if [[ $HOST == 'main' ]]
+    then
+        INDEX=$INDEX+1
+        PARSE=false
+    fi
+    if [[ $PARSE == 'true' ]]
+    then
+        if [[ "${DESC[$INDEX]}a" == "a" ]]
+        then
+            DESC[$INDEX]=Total/${HOST/\/}
+        else
+            IP[$INDEX]=${HOST/\/32/}
+        fi
+    fi
+    if [[ $HOST == ';;;' ]]
+    then
+        PARSE=true
+    fi
+done
+
+
 while read -r line
 do 
     line=`echo $line | grep :`
@@ -69,11 +90,19 @@ do
     fi
 done < $CONF
 
-cmd="/export file=zaloha.rsc; /system backup save name=zaloha.backup;"
-echo $cmd > $LOG
-echo "--------------------------------------------------------------------------------" >> $LOG
+echo "Taking backup of:"
 for (( a=0 ; $a-INDEX ; a=$a+1 ))
     do
+    echo ${IP[$a]} -  ${DESC[$a]}
+done
+
+
+echo "--------------------------------------------------------------------------------" >> $LOG
+for (( a=0 ; $a-INDEX ; a=$a+1 ))
+do
+    basefilename=${DESC[$a]//\//-}-${IP[$a]}
+    cmd="/export file=${basefilename}.rsc; /system backup save name=${basefilename}.backup;"
+    echo $cmd > $LOG
     echo ${IP[$a]} -  ${DESC[$a]}
     echo ${IP[$a]} -  ${DESC[$a]} >> $LOG
     #sshpass -p $SSH_PASS ssh -o StrictHostKeyChecking=no $SSH_USER@${IP[$a]} $cmd >> $LOG
@@ -85,8 +114,9 @@ for (( a=0 ; $a-INDEX ; a=$a+1 ))
 	SCP_ERROR=yes
     else
     sleep 2
-	for SCPFILE in zaloha.backup zaloha.rsc
+	for SCPFILE in ${basefilename}.backup ${basefilename}.rsc
 	do
+            mkdir -p ${BACKUP_PATH}/${DESC[$a]}/
 	    sshpass -p $SSH_PASS scp -o StrictHostKeyChecking=no $SSH_USER@${IP[$a]}:/${SCPFILE} ${BACKUP_PATH}/${DESC[$a]}/ >/dev/null 2>&1
 	    if [[ $? != 0 ]]; then
 	        echo -e " \e[31mErr\e[0m Transfer ${SCPFILE} failed!"
